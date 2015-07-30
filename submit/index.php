@@ -1,10 +1,7 @@
 
 <?php
-    ini_set('error_reporting', E_ALL);
-    
-    error_log(print_r($_POST, true) . "\n", 3, "../data/debug.log");
-    error_log(print_r($_GET, true) . "\n", 3, "../data/debug.log");
-    //error_log(http_get_request_body() . "\n", 3, "../data/debug.log");
+
+    require_once('../config.php');
     
     if($_SERVER['REQUEST_METHOD'] != 'POST'){
        render_test_form();
@@ -26,17 +23,157 @@
     
     if(isset($_POST['survey'])){
         
-        $now = time();
+        $survey =   json_decode($_POST['survey']);
+        $surveyor = json_decode($_POST['surveyor']);
+        $api_key = $_POST['api_key'];
         
-        // just write them to a file - will be written to 
-        file_put_contents('../data/survey_' . $now . '.txt', $_POST['survey'] );
-        file_put_contents('../data/surveyor_' . $now . '.txt', $_POST['surveyor'] );
+        error_log(print_r($survey, true));
+        error_log(print_r($surveyor, true));
+        
+        // insert the submission
+        $user_id = get_user_id($surveyor->email, $surveyor->display_name);
+        $api_key_id = get_api_key_id($user_id, $api_key);
+        $survey_id = $survey->id; // fixme - sanitize variable before e.g. 5c102144-4448-4160-8f26-31cd64ac11c6
+        $survey_json = json_encode($survey); // re-encode to help prevent sql injection
+        $surveyor_json = json_encode($surveyor); // re-encode to help prevent sql injection
+        
+        $sql = "INSERT INTO submissions (survey_id, survey_json, surveyor_json, api_key_id, created) VALUES ('$survey_id', '$survey_json', '$surveyor_json', $api_key_id, now() )";
+        
+        if (!$mysqli->query($sql)) {
+            error_log($sql);
+            error_log($mysqli->error);
+        }
+        $mysqli->query($sql);
         
         echo 0;
         
     }
     
+function get_api_key_id($user_id, $api_key){
     
+    global $mysqli;
+    
+    error_log($api_key);
+    error_log($user_id);
+    
+    $stmt = $mysqli->prepare("SELECT id FROM api_keys WHERE `key` = ? AND `user_id` = ? ");
+    if(!$stmt){
+        error_log($mysqli->error);
+    }
+    
+    $stmt->bind_param("si", $api_key, $user_id);
+    $stmt->execute();
+    $stmt->store_result();
+    if($stmt->num_rows == 0){
+    
+        // the key doesn't exist yet for this user so create it
+        $stmt = $mysqli->prepare("INSERT INTO api_keys (`user_id`, `key`, `created`) VALUES (?, ?, now())");
+        $stmt->bind_param("is", $user_id, $api_key);
+        $stmt->execute();
+        $id = $stmt->insert_id;
+        $stmt->close();
+        return $id;
+        
+    }else{
+        
+        // The key combination exists        
+        $stmt->bind_result($db_id);
+        $stmt->fetch();
+        return $db_id;
+        
+    }
+    
+}
+
+
+function get_user_id($email, $display_name){
+    
+     global $mysqli;
+    
+    // have we seen this user before
+    $email = trim($email);
+    $stmt = $mysqli->prepare("SELECT id, email, display_name FROM users WHERE email = ?");
+    $stmt->bind_param("s", $email);
+    $stmt->execute();
+    $stmt->store_result();
+    if($stmt->num_rows == 0){
+        
+        error_log('Not Seen user before');
+        
+        // we haven't seen this user before - can we create them
+        if(display_name_available($display_name)){
+            $stmt = $mysqli->prepare("INSERT INTO users (display_name, email, created) VALUES (?, ?, now())");
+            $stmt->bind_param("ss", $display_name, $email);
+            $stmt->execute();
+            $id = $stmt->insert_id;
+            $stmt->close();
+            return $id;
+            
+        }else{
+            display_name_clash($display_name);
+            return false;
+        }
+        
+    }else{
+        
+        // we have seen them before        
+        $stmt->bind_result($db_id, $db_email, $db_display_name);
+        $stmt->fetch();
+        
+        // have they changed their user name?
+        if($db_display_name != $display_name){
+            
+            if(display_name_available($display_name)){
+                // OK so update their display_name and return the id
+                $stmt = $mysqli->prepare("UPDATE users SET display_name = ? WHERE id = ?");
+                $stmt->bind_param("si", $display_name, $db_id);
+                $stmt->execute();
+                return $db_id;
+            }else{
+                // bad stuff so give up
+                display_name_clash($display_name);
+                return false;
+            }
+            
+        }else{
+            // nothing changed so return their id
+            return $db_id; 
+        }
+        
+    }
+    
+    $stmt->close();
+    
+}
+
+// return some kind of warning that 
+// we can't save with a clash of display_names
+function display_name_clash($display_name){
+    header("HTTP/1.1 409 Conflict");
+    echo "The display name '$display_name' is already in use. Please pick another.";
+    exit();
+}
+
+function display_name_available($display_name){
+    
+    global $mysqli;
+    
+    $stmt = $mysqli->prepare("SELECT count(*) FROM users WHERE display_name = ?");
+    $stmt->bind_param("s", $display_name);
+    $stmt->execute();
+    $stmt->bind_result($count);
+    $stmt->fetch();
+    $stmt->close();
+    if($count > 0){
+        echo $display_name . "- Not available";
+        return false;
+    }else{
+        echo $display_name . "- Available";
+        return true;
+    }
+    
+}    
+ 
 function render_test_form(){
 ?>
 
@@ -61,6 +198,8 @@ function render_test_form(){
     </script>
 </head>
 <body>
+
+<?php echo display_name_available($_GET['dn']); ?>
 
 <form action="index.php" method="POST" enctype="multipart/form-data">
     <h2>Select image to upload</h2>
