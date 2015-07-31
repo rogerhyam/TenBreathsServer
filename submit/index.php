@@ -53,8 +53,8 @@ function get_api_key_id($user_id, $api_key){
     
     global $mysqli;
     
-    error_log($api_key);
-    error_log($user_id);
+    error_log("Api key: " . $api_key);
+    error_log("user id: " . $user_id);
     
     $stmt = $mysqli->prepare("SELECT id FROM api_keys WHERE `key` = ? AND `user_id` = ? ");
     if(!$stmt){
@@ -70,10 +70,16 @@ function get_api_key_id($user_id, $api_key){
         $stmt = $mysqli->prepare("INSERT INTO api_keys (`user_id`, `key`, `created`) VALUES (?, ?, now())");
         $stmt->bind_param("is", $user_id, $api_key);
         $stmt->execute();
-        $id = $stmt->insert_id;
-        $stmt->close();
-        return $id;
-        
+        if($stmt->affected_rows != 1){
+            error_log($mysqli->error);
+            $stmt->close();
+            return false;
+        }else{
+            $id = $stmt->insert_id;
+            $stmt->close();
+            return $id;
+        }
+
     }else{
         
         // The key combination exists        
@@ -102,13 +108,21 @@ function get_user_id($email, $display_name){
         
         // we haven't seen this user before - can we create them
         if(display_name_available($display_name)){
+            error_log("About to CREATE user");
             $stmt = $mysqli->prepare("INSERT INTO users (display_name, email, created) VALUES (?, ?, now())");
             $stmt->bind_param("ss", $display_name, $email);
             $stmt->execute();
-            $id = $stmt->insert_id;
-            $stmt->close();
-            return $id;
-            
+            if($stmt->affected_rows != 1){
+                error_log($mysqli->error);
+                $stmt->close();
+                return false;
+            }else{
+                $id = $stmt->insert_id;
+                error_log("CREATED user: " . $id);
+                $stmt->close();
+                return $id;
+            }
+           
         }else{
             display_name_clash($display_name);
             return false;
@@ -125,9 +139,11 @@ function get_user_id($email, $display_name){
             
             if(display_name_available($display_name)){
                 // OK so update their display_name and return the id
+                error_log("About to UPDATE user");
                 $stmt = $mysqli->prepare("UPDATE users SET display_name = ? WHERE id = ?");
                 $stmt->bind_param("si", $display_name, $db_id);
                 $stmt->execute();
+                error_log("UPDATEd  user");
                 return $db_id;
             }else{
                 // bad stuff so give up
@@ -165,10 +181,10 @@ function display_name_available($display_name){
     $stmt->fetch();
     $stmt->close();
     if($count > 0){
-        echo $display_name . "- Not available";
+        error_log($display_name . " - Not available");
         return false;
     }else{
-        echo $display_name . "- Available";
+        error_log($display_name . " - Available");
         return true;
     }
     
